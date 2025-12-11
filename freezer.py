@@ -26,11 +26,13 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import hashlib
 from pathlib import Path
 
 
 MARKER = b"ASMLSFX1"
-FOOTER_LEN = len(MARKER) + 8  # payload length (int64 LE) + marker
+# footer layout: payload length (int64 LE) + SHA256 (32 bytes) + marker
+FOOTER_LEN = len(MARKER) + 8 + 32
 MANIFEST_NAME = "__main_path.txt"
 
 
@@ -218,11 +220,13 @@ def compile_stub(temp_dir: Path, *, verbose: bool) -> Path:
 def assemble_exe(stub_path: Path, payload_zip: Path, output_path: Path) -> None:
 	payload_bytes = payload_zip.read_bytes()
 	payload_len = len(payload_bytes)
+	sha256_digest = hashlib.sha256(payload_bytes).digest()
 
 	with stub_path.open("rb") as stub_file, output_path.open("wb") as out:
 		shutil.copyfileobj(stub_file, out)
 		out.write(payload_bytes)
 		out.write(struct.pack("<Q", payload_len))
+		out.write(sha256_digest)
 		out.write(MARKER)
 
 
@@ -277,12 +281,14 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
+using System.Security.Cryptography;
 
 internal static class Program
 {
 	private const string MarkerText = "ASMLSFX1";
 	private static readonly byte[] MarkerBytes = Encoding.ASCII.GetBytes(MarkerText);
-	private static readonly int FooterLength = MarkerText.Length + 8; // marker + payload length (int64)
+	// marker + payload length (int64) + SHA256 (32 bytes)
+	private static readonly int FooterLength = MarkerText.Length + 8 + 32;
 	private const string ManifestName = "__main_path.txt";
 
 	public static int Main(string[] args)
@@ -357,8 +363,14 @@ internal static class Program
 			if (!EqualBytes(markerBuffer, MarkerBytes))
 				throw new InvalidOperationException("Marker not found; file is not a valid ASM-Lang SFX.");
 
-			fs.Seek(-(FooterLength), SeekOrigin.End);
+			fs.Seek(-FooterLength, SeekOrigin.End);
 			long payloadLen = ReadInt64(fs);
+
+			var storedSha = new byte[32];
+			int shaRead = fs.Read(storedSha, 0, storedSha.Length);
+			if (shaRead != storedSha.Length)
+				throw new InvalidOperationException("Failed to read stored payload SHA256.");
+
 			if (payloadLen <= 0 || payloadLen > fs.Length)
 				throw new InvalidOperationException("Invalid payload length in footer.");
 
@@ -368,8 +380,27 @@ internal static class Program
 
 			fs.Seek(payloadOffset, SeekOrigin.Begin);
 			using (FileStream outFs = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None))
+			using (var sha = SHA256.Create())
 			{
-				CopyBytes(fs, outFs, payloadLen);
+				byte[] buffer = new byte[8192];
+				long remaining = payloadLen;
+				while (remaining > 0)
+				{
+					int toRead = (int)Math.Min(buffer.Length, remaining);
+					int read = fs.Read(buffer, 0, toRead);
+					if (read == 0)
+						throw new EndOfStreamException("Unexpected end of file while copying payload.");
+					sha.TransformBlock(buffer, 0, read, null, 0);
+					outFs.Write(buffer, 0, read);
+					remaining -= read;
+				}
+				sha.TransformFinalBlock(new byte[0], 0, 0);
+				byte[] computed = sha.Hash;
+				if (!EqualBytes(computed, storedSha))
+				{
+					try { outFs.Close(); File.Delete(zipPath); } catch { }
+					throw new InvalidOperationException("Payload SHA256 does not match; file may be corrupt.");
+				}
 			}
 		}
 	}
@@ -381,21 +412,6 @@ internal static class Program
 		if (read != buffer.Length)
 			throw new InvalidOperationException("Failed to read payload length.");
 		return BitConverter.ToInt64(buffer, 0);
-	}
-
-	private static void CopyBytes(Stream src, Stream dest, long bytesToCopy)
-	{
-		byte[] buffer = new byte[8192];
-		long remaining = bytesToCopy;
-		while (remaining > 0)
-		{
-			int toRead = (int)Math.Min(buffer.Length, remaining);
-			int read = src.Read(buffer, 0, toRead);
-			if (read == 0)
-				throw new EndOfStreamException("Unexpected end of file while copying payload.");
-			dest.Write(buffer, 0, read);
-			remaining -= read;
-		}
 	}
 
 	private static bool EqualBytes(byte[] a, byte[] b)
