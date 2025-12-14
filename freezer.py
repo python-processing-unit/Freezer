@@ -48,7 +48,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 	parser.add_argument(
 		"asmln_exe",
-		help="Path to the ASM-Lang asm-lang.exe to bundle",
+		nargs="?",
+		default=None,
+		help="Path to the ASM-Lang asm-lang.exe to bundle (optional; will search PATH if omitted)",
 	)
 	parser.add_argument(
 		"main_file",
@@ -234,7 +236,17 @@ def build(argv: list[str]) -> None:
 	args = parse_args(argv)
 	ensure_windows()
 
-	asmln_exe = Path(args.asmln_exe).expanduser().resolve()
+	if args.asmln_exe is None:
+		# Try to find asm-lang.exe on PATH when omitted
+		found = shutil.which("asm-lang.exe") or shutil.which("asm-lang")
+		if not found:
+			raise BuildError(
+				"asm-lang.exe not provided and not found on PATH; provide its path or install ASM-Lang."
+			)
+		asmln_exe = Path(found).expanduser().resolve()
+		log(f"Found asm-lang.exe on PATH: {asmln_exe}", verbose=args.verbose)
+	else:
+		asmln_exe = Path(args.asmln_exe).expanduser().resolve()
 	main_file = Path(args.main_file).expanduser().resolve()
 	main_dest_rel = args.main_dest.strip() or "."
 	default_output = Path.cwd() / (main_file.stem + ".exe")
