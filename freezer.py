@@ -2,13 +2,13 @@
 Executable builder for ASM-Lang on Windows 10+.
 
 Creates a self-extracting executable that bundles:
-- The ASM-Lang runtime (`asmln.exe`) and its `lib/` folder.
+- The ASM-Lang runtime (`asm-lang.exe`) and its `lib/` folder.
 - A main ASM-Lang script to run on startup.
 - Optional additional files and folders placed at custom paths inside the bundle.
 
 Runtime behavior of the generated EXE:
 1) Extracts itself to a temp directory.
-2) Runs `asmln.exe <main script>` from that temp directory.
+2) Runs `asm-lang.exe <main script>` from that temp directory.
 3) Cleans up extracted files on exit.
 
 No external dependencies are required beyond stock Windows 10 (uses the built-in
@@ -48,7 +48,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 	parser.add_argument(
 		"asmln_exe",
-		help="Path to the ASM-Lang asmln.exe to bundle",
+		help="Path to the ASM-Lang asm-lang.exe to bundle",
 	)
 	parser.add_argument(
 		"main_file",
@@ -150,14 +150,14 @@ def copy_include_folders(
 
 def copy_asmln_runtime(asmln_exe: Path, payload_root: Path, *, verbose: bool) -> None:
 	if not asmln_exe.exists() or not asmln_exe.is_file():
-		raise BuildError(f"asmln.exe not found: {asmln_exe}")
+		raise BuildError(f"asm-lang.exe not found: {asmln_exe}")
 	runtime_dir = asmln_exe.parent
 	lib_dir = runtime_dir / "lib"
 	if not lib_dir.exists() or not lib_dir.is_dir():
 		raise BuildError(f"ASM-Lang lib/ folder not found next to {asmln_exe}")
 
-	shutil.copy2(asmln_exe, payload_root / "asmln.exe")
-	log("Copied asmln.exe", verbose=verbose)
+	shutil.copy2(asmln_exe, payload_root / "asm-lang.exe")
+	log("Copied asm-lang.exe", verbose=verbose)
 	shutil.copytree(lib_dir, payload_root / "lib", dirs_exist_ok=True)
 	log("Copied lib/", verbose=verbose)
 
@@ -312,9 +312,9 @@ internal static class Program
 			if (string.IsNullOrWhiteSpace(mainRel))
 				throw new InvalidOperationException("Main script path missing from manifest.");
 
-			string asmlnPath = Path.Combine(tempRoot, "asmln.exe");
+			string asmlnPath = Path.Combine(tempRoot, "asm-lang.exe");
 			if (!File.Exists(asmlnPath))
-				throw new InvalidOperationException("Bundled asmln.exe is missing.");
+				throw new InvalidOperationException("Bundled asm-lang.exe is missing.");
 
 			string mainPath = Path.Combine(tempRoot, mainRel);
 
@@ -328,7 +328,7 @@ internal static class Program
 
 			var proc = Process.Start(psi);
 			if (proc == null)
-				throw new InvalidOperationException("Failed to start asmln.exe");
+				throw new InvalidOperationException("Failed to start asm-lang.exe");
 			proc.WaitForExit();
 			return proc.ExitCode;
 		}
