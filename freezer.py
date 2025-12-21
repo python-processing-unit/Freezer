@@ -157,11 +157,16 @@ def copy_asmln_runtime(asmln_exe: Path, payload_root: Path, *, verbose: bool) ->
 	lib_dir = runtime_dir / "lib"
 	if not lib_dir.exists() or not lib_dir.is_dir():
 		raise BuildError(f"ASM-Lang lib/ folder not found next to {asmln_exe}")
+	ext_dir = runtime_dir / "ext"
+	if not ext_dir.exists() or not ext_dir.is_dir():
+		raise BuildError(f"ASM-Lang ext/ folder not found next to {asmln_exe}")
 
 	shutil.copy2(asmln_exe, payload_root / "asm-lang.exe")
 	log("Copied asm-lang.exe", verbose=verbose)
 	shutil.copytree(lib_dir, payload_root / "lib", dirs_exist_ok=True)
 	log("Copied lib/", verbose=verbose)
+	shutil.copytree(ext_dir, payload_root / "ext", dirs_exist_ok=True)
+	log("Copied ext/", verbose=verbose)
 
 
 def write_manifest(payload_root: Path, main_rel_path: str) -> None:
@@ -266,6 +271,42 @@ def build(argv: list[str]) -> None:
 		log("Copying main script...", verbose=args.verbose)
 		main_rel_path = copy_main(main_file, main_dest_rel, payload_root)
 		log(f"Main placed at {main_rel_path}", verbose=args.verbose)
+
+		# Ensure an extension pointer file (.asmxt) is present in the bundle so
+		# the runtime can discover included `ext/` modules automatically when
+		# the SFX extracts and runs from the temp directory.
+		# Prefer an existing pointer file next to the original main file, or
+		# the program-specific .asmxt (e.g. program.asmxt). Otherwise generate
+		# one that points into the bundled `ext/` folder.
+		try:
+			pointer_candidates = [
+				main_file.parent / ".asmxt",
+				main_file.with_suffix(".asmxt"),
+			]
+			pointer_copied = False
+			for pc in pointer_candidates:
+				if pc.exists():
+					shutil.copy2(pc, payload_root / ".asmxt")
+					log(f"Copied pointer file {pc} -> .asmxt", verbose=args.verbose)
+					pointer_copied = True
+					break
+			if not pointer_copied:
+				# Auto-generate .asmxt listing all .py files in payload_root/ext
+				ext_dir = payload_root / "ext"
+				if ext_dir.exists() and ext_dir.is_dir():
+					lines: list[str] = []
+					for f in sorted(ext_dir.iterdir()):
+						if f.is_file() and f.suffix == ".py":
+							# Reference the file relative to the bundle root so the
+							# interpreter will resolve it directly after extraction.
+							lines.append(str(Path("ext") / f.name))
+					if lines:
+						(payload_root / ".asmxt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+						log(f"Generated .asmxt with {len(lines)} extensions", verbose=args.verbose)
+		except OSError:
+			# Best-effort only; failure to copy/generate a pointer should not
+			# abort the build. The runtime will continue without extensions.
+			pass
 
 		if args.include:
 			log("Copying additional files...", verbose=args.verbose)
