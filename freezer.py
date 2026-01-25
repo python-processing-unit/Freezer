@@ -1,18 +1,18 @@
 """
-Executable builder for ASM-Lang on Windows 10+.
+Executable builder for Prefix on Windows 10+.
 
 Creates a self-extracting executable that bundles:
-- The ASM-Lang runtime (`asm-lang.exe`) and its `lib/` folder.
-- A main ASM-Lang script to run on startup.
+- The Prefix runtime (`prefix.exe`) and its `lib/` folder.
+- A main Prefix script to run on startup.
 - Optional additional files and folders placed at custom paths inside the bundle.
 
 Runtime behavior of the generated EXE:
 1) Extracts itself to a temp directory.
-2) Runs `asm-lang.exe <main script>` from that temp directory.
+2) Runs `prefix.exe <main script>` from that temp directory.
 3) Cleans up extracted files on exit.
 
 No external dependencies are required beyond stock Windows 10 (uses the built-in
-`csc.exe` compiler from the .NET Framework). A working ASM-Lang installation is
+`csc.exe` compiler from the .NET Framework). A working Prefix installation is
 still required for the bundled runtime and libraries you provide.
 """
 
@@ -30,7 +30,7 @@ import hashlib
 from pathlib import Path
 
 
-MARKER = b"ASMLSFX1"
+MARKER = b"PREFIXSFX1"
 # footer layout: payload length (int64 LE) + SHA256 (32 bytes) + marker
 FOOTER_LEN = len(MARKER) + 8 + 32
 MANIFEST_NAME = "__main_path.txt"
@@ -42,19 +42,19 @@ class BuildError(Exception):
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Build a self-extracting ASM-Lang executable for Windows 10+",
+		description="Build a self-extracting prefix executable for Windows 10+",
 		formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 	)
 
 	parser.add_argument(
-		"asmln_exe",
+		"pre_exe",
 		nargs="?",
 		default=None,
-		help="Path to the ASM-Lang asm-lang.exe to bundle (optional; will search PATH if omitted)",
+		help="Path to the prefix prefix.exe to bundle (optional; will search PATH if omitted)",
 	)
 	parser.add_argument(
 		"main_file",
-		help="Path to the main ASM-Lang script to run on startup",
+		help="Path to the main prefix script to run on startup",
 	)
 	parser.add_argument(
 		"--include",
@@ -150,10 +150,10 @@ def copy_include_folders(
 		shutil.copytree(src, target_dir, dirs_exist_ok=True)
 
 
-def copy_asmln_runtime(asmln_exe: Path, payload_root: Path, *, verbose: bool) -> None:
-	if not asmln_exe.exists() or not asmln_exe.is_file():
-		raise BuildError(f"asm-lang.exe not found: {asmln_exe}")
-	runtime_dir = asmln_exe.parent
+def copy_pre_runtime(pre_exe: Path, payload_root: Path, *, verbose: bool) -> None:
+	if not pre_exe.exists() or not pre_exe.is_file():
+		raise BuildError(f"prefix.exe not found: {pre_exe}")
+	runtime_dir = pre_exe.parent
 
 	# Copy all files and folders from the runtime directory into the payload root.
 	# This ensures the entire runtime directory (exe, lib/, ext/, etc.) is embedded.
@@ -207,8 +207,8 @@ def compile_stub(temp_dir: Path, *, verbose: bool) -> Path:
 
 	stub_cs = temp_dir / "stub.cs"
 	stub_exe = temp_dir / "stub.exe"
-	# Read the C# stub source from the separate freezer.cs file next to this script.
-	stub_source_path = Path(__file__).parent / "freezer.cs"
+	# Read the C# stub source from the separate bootloader.cs file next to this script.
+	stub_source_path = Path(__file__).parent / "bootloader.cs"
 	if not stub_source_path.exists():
 		raise BuildError(f"Embedded C# stub file not found: {stub_source_path}")
 	stub_cs.write_text(stub_source_path.read_text(encoding="utf-8"), encoding="utf-8")
@@ -247,17 +247,17 @@ def build(argv: list[str]) -> None:
 	args = parse_args(argv)
 	ensure_windows()
 
-	if args.asmln_exe is None:
-		# Try to find asm-lang.exe on PATH when omitted
-		found = shutil.which("asm-lang.exe") or shutil.which("asm-lang")
+	if args.pre_exe is None:
+		# Try to find prefix.exe on PATH when omitted
+		found = shutil.which("prefix.exe") or shutil.which("prefix")
 		if not found:
 			raise BuildError(
-				"asm-lang.exe not provided and not found on PATH; provide its path or install ASM-Lang."
+				"prefix.exe not provided and not found on PATH; provide its path or install prefix."
 			)
-		asmln_exe = Path(found).expanduser().resolve()
-		log(f"Found asm-lang.exe on PATH: {asmln_exe}", verbose=args.verbose)
+		pre_exe = Path(found).expanduser().resolve()
+		log(f"Found prefix.exe on PATH: {pre_exe}", verbose=args.verbose)
 	else:
-		asmln_exe = Path(args.asmln_exe).expanduser().resolve()
+		pre_exe = Path(args.pre_exe).expanduser().resolve()
 	main_file = Path(args.main_file).expanduser().resolve()
 	main_dest_rel = args.main_dest.strip() or "."
 	default_output = Path.cwd() / (main_file.stem + ".exe")
@@ -271,33 +271,33 @@ def build(argv: list[str]) -> None:
 		payload_root = tmpdir / "payload"
 		payload_root.mkdir(parents=True, exist_ok=True)
 
-		log("Copying ASM-Lang runtime...", verbose=args.verbose)
-		copy_asmln_runtime(asmln_exe, payload_root, verbose=args.verbose)
+		log("Copying prefix runtime...", verbose=args.verbose)
+		copy_pre_runtime(pre_exe, payload_root, verbose=args.verbose)
 
 		log("Copying main script...", verbose=args.verbose)
 		main_rel_path = copy_main(main_file, main_dest_rel, payload_root)
 		log(f"Main placed at {main_rel_path}", verbose=args.verbose)
 
-		# Ensure an extension pointer file (.asmxt) is present in the bundle so
+		# Ensure an extension pointer file (.prex) is present in the bundle so
 		# the runtime can discover included `ext/` modules automatically when
 		# the SFX extracts and runs from the temp directory.
 		# Prefer an existing pointer file next to the original main file, or
-		# the program-specific .asmxt (e.g. program.asmxt). Otherwise generate
+		# the program-specific .prex (e.g. program.prex). Otherwise generate
 		# one that points into the bundled `ext/` folder.
 		try:
 			pointer_candidates = [
-				main_file.parent / ".asmxt",
-				main_file.with_suffix(".asmxt"),
+				main_file.parent / ".prex",
+				main_file.with_suffix(".prex"),
 			]
 			pointer_copied = False
 			for pc in pointer_candidates:
 				if pc.exists():
-					shutil.copy2(pc, payload_root / ".asmxt")
-					log(f"Copied pointer file {pc} -> .asmxt", verbose=args.verbose)
+					shutil.copy2(pc, payload_root / ".prex")
+					log(f"Copied pointer file {pc} -> .prex", verbose=args.verbose)
 					pointer_copied = True
 					break
 			if not pointer_copied:
-				# Auto-generate .asmxt listing all .py files in payload_root/ext
+				# Auto-generate .prex listing all .py files in payload_root/ext
 				ext_dir = payload_root / "ext"
 				if ext_dir.exists() and ext_dir.is_dir():
 					lines: list[str] = []
@@ -307,8 +307,8 @@ def build(argv: list[str]) -> None:
 							# interpreter will resolve it directly after extraction.
 							lines.append(str(Path("ext") / f.name))
 					if lines:
-						(payload_root / ".asmxt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-						log(f"Generated .asmxt with {len(lines)} extensions", verbose=args.verbose)
+						(payload_root / ".prex").write_text("\n".join(lines) + "\n", encoding="utf-8")
+						log(f"Generated .prex with {len(lines)} extensions", verbose=args.verbose)
 		except OSError:
 			# Best-effort only; failure to copy/generate a pointer should not
 			# abort the build. The runtime will continue without extensions.

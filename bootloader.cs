@@ -7,7 +7,7 @@ using System.Security.Cryptography;
 
 internal static class Program
 {
-	private const string MarkerText = "ASMLSFX1";
+	private const string MarkerText = "PREFIXSFX1";
 	private static readonly byte[] MarkerBytes = Encoding.ASCII.GetBytes(MarkerText);
 	// marker + payload length (int64) + SHA256 (32 bytes)
 	private static readonly int FooterLength = MarkerText.Length + 8 + 32;
@@ -16,7 +16,7 @@ internal static class Program
 	public static int Main(string[] args)
 	{
 		string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-		string tempRoot = Path.Combine(Path.GetTempPath(), "asmln_sfx_" + Guid.NewGuid().ToString("N"));
+		string tempRoot = Path.Combine(Path.GetTempPath(), "pre_sfx_" + Guid.NewGuid().ToString("N"));
 		Directory.CreateDirectory(tempRoot);
 		string zipPath = Path.Combine(tempRoot, "payload.zip");
 
@@ -34,15 +34,15 @@ internal static class Program
 			if (string.IsNullOrWhiteSpace(mainRel))
 				throw new InvalidOperationException("Main script path missing from manifest.");
 
-			string asmlnPath = Path.Combine(tempRoot, "asm-lang.exe");
-			if (!File.Exists(asmlnPath))
-				throw new InvalidOperationException("Bundled asm-lang.exe is missing.");
+			string prePath = Path.Combine(tempRoot, "prefix.exe");
+			if (!File.Exists(prePath))
+				throw new InvalidOperationException("Bundled prefix.exe is missing.");
 
 			string mainPath = Path.Combine(tempRoot, mainRel);
 
 			var psi = new ProcessStartInfo
 			{
-				FileName = asmlnPath,
+				FileName = prePath,
 				Arguments = Quote(mainPath),
 				WorkingDirectory = tempRoot,
 				UseShellExecute = false,
@@ -50,13 +50,13 @@ internal static class Program
 
 			var proc = Process.Start(psi);
 			if (proc == null)
-				throw new InvalidOperationException("Failed to start asm-lang.exe");
+				throw new InvalidOperationException("Failed to start prefix.exe");
 			proc.WaitForExit();
 			return proc.ExitCode;
 		}
 		catch (Exception ex)
 		{
-			Console.Error.WriteLine("ASM-Lang SFX error: " + ex);
+			Console.Error.WriteLine("Prefix SFX error: " + ex);
 			return 1;
 		}
 		finally
@@ -83,7 +83,7 @@ internal static class Program
 			if (markerRead != markerBuffer.Length)
 				throw new InvalidOperationException("Failed to read marker.");
 			if (!EqualBytes(markerBuffer, MarkerBytes))
-				throw new InvalidOperationException("Marker not found; file is not a valid ASM-Lang SFX.");
+				throw new InvalidOperationException("Marker not found; file is not a valid Prefix SFX.");
 
 			fs.Seek(-FooterLength, SeekOrigin.End);
 			long payloadLen = ReadInt64(fs);
