@@ -156,10 +156,11 @@ def copy_include_folders(
 		shutil.copytree(src, target_dir, dirs_exist_ok=True)
 
 
-def copy_pre_runtime(pre_exe: Path, payload_root: Path, *, verbose: bool) -> None:
+def copy_pre_runtime(pre_exe: Path, payload_root: Path, *, verbose: bool, exclude: set[Path] | None = None) -> None:
 	if not pre_exe.exists() or not pre_exe.is_file():
 		raise BuildError(f"prefix.exe not found: {pre_exe}")
 	runtime_dir = pre_exe.parent
+	exclude = exclude or set()
 
 	# Copy all files and folders from the runtime directory into the payload root.
 	# This ensures the entire runtime directory (exe, lib/, ext/, etc.) is embedded.
@@ -168,6 +169,12 @@ def copy_pre_runtime(pre_exe: Path, payload_root: Path, *, verbose: bool) -> Non
 		if entry.name in (".git", ".gitignore"):
 			log(f"Skipping {entry.name}", verbose=verbose)
 			continue
+		
+		# Skip excluded files (e.g. the output executable itself)
+		if entry.resolve() in exclude:
+			log(f"Skipping excluded file {entry.name}", verbose=verbose)
+			continue
+
 		target = payload_root / entry.name
 		if entry.is_dir():
 			shutil.copytree(entry, target, dirs_exist_ok=True)
@@ -288,6 +295,14 @@ def assemble_exe(stub_path: Path, payload_zip: Path, output_path: Path) -> None:
 	payload_len = len(payload_bytes)
 	sha256_digest = hashlib.sha256(payload_bytes).digest()
 
+	# Ensure parent directory exists
+	output_path.parent.mkdir(parents=True, exist_ok=True)
+	
+	# Delete existing output file if present to avoid any append behavior
+	if output_path.exists():
+		output_path.unlink()
+	
+	# Write directly to the output path with explicit truncation mode
 	with stub_path.open("rb") as stub_file, output_path.open("wb") as out:
 		shutil.copyfileobj(stub_file, out)
 		out.write(payload_bytes)
@@ -325,7 +340,7 @@ def build(argv: list[str]) -> None:
 		payload_root.mkdir(parents=True, exist_ok=True)
 
 		log("Copying prefix runtime...", verbose=args.verbose)
-		copy_pre_runtime(pre_exe, payload_root, verbose=args.verbose)
+		copy_pre_runtime(pre_exe, payload_root, verbose=args.verbose, exclude={output_path})
 
 		log("Copying main script...", verbose=args.verbose)
 		main_rel_path = copy_main(main_file, main_dest_rel, payload_root)
@@ -385,7 +400,6 @@ def build(argv: list[str]) -> None:
 		if args.icon:
 			ico_for_build = convert_image_to_ico(Path(args.icon), tmpdir, verbose=args.verbose)
 		stub_exe = compile_stub(tmpdir, verbose=args.verbose, win_icon=ico_for_build)
-		output_path.parent.mkdir(parents=True, exist_ok=True)
 		assemble_exe(stub_exe, payload_zip, output_path)
 
 		log(f"Built self-extracting EXE: {output_path}", verbose=True)
