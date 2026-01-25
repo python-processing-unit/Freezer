@@ -88,6 +88,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 		help="Enable verbose logging",
 	)
 
+	parser.add_argument(
+		"--icon",
+		default=None,
+		help="Path to an ICO or image file to use as the generated EXE icon; non-ICO images will be converted using GDI+.",
+	)
+
 	return parser.parse_args(argv)
 
 
@@ -200,14 +206,15 @@ def find_csc() -> Path | None:
 	return candidates[0] if candidates else None
 
 
-def compile_stub(temp_dir: Path, *, verbose: bool) -> Path:
+
+def compile_stub(temp_dir: Path, *, verbose: bool, win_icon: Path | None = None) -> Path:
+	# Backwards-compatible wrapper that optionally compiles the stub with an icon.
 	csc_path = find_csc()
 	if not csc_path:
 		raise BuildError("Could not find csc.exe (part of the .NET Framework) on this system.")
 
 	stub_cs = temp_dir / "stub.cs"
 	stub_exe = temp_dir / "stub.exe"
-	# Read the C# stub source from the separate bootloader.cs file next to this script.
 	stub_source_path = Path(__file__).parent / "bootloader.cs"
 	if not stub_source_path.exists():
 		raise BuildError(f"Embedded C# stub file not found: {stub_source_path}")
@@ -221,13 +228,59 @@ def compile_stub(temp_dir: Path, *, verbose: bool) -> Path:
 		f"/out:{stub_exe}",
 		"/optimize+",
 		"/r:System.IO.Compression.FileSystem.dll",
-		str(stub_cs),
 	]
+	if win_icon:
+		cmd.append(f"/win32icon:{win_icon}")
+	cmd.append(str(stub_cs))
+
 	log(f"Compiling stub with {csc_path}", verbose=verbose)
 	result = subprocess.run(cmd, capture_output=not verbose, text=True)
 	if result.returncode != 0:
 		raise BuildError(f"csc.exe failed: {result.stdout}\n{result.stderr}")
 	return stub_exe
+
+
+def convert_image_to_ico(icon_path: Path, tmp_dir: Path, *, verbose: bool) -> Path:
+	icon_path = icon_path.expanduser().resolve()
+	if not icon_path.exists():
+		raise BuildError(f"Icon file not found: {icon_path}")
+	if icon_path.suffix.lower() == ".ico":
+		return icon_path
+
+	csc_path = find_csc()
+	if not csc_path:
+		raise BuildError("Could not find csc.exe to compile the image-to-ico converter.")
+
+	converter_cs = tmp_dir / "gen_ico.cs"
+	converter_exe = tmp_dir / "gen_ico.exe"
+	out_ico = tmp_dir / "icon.ico"
+
+	source_path = Path(__file__).parent / "gen_ico.cs"
+	if not source_path.exists():
+		raise BuildError(f"Image converter source not found: {source_path}")
+
+	cmd = [
+		str(csc_path),
+		"/nologo",
+		"/target:exe",
+		f"/out:{converter_exe}",
+		"/optimize+",
+		"/r:System.Drawing.dll",
+		str(source_path),
+	]
+	log(f"Compiling image->ICO converter with {csc_path}", verbose=verbose)
+	res = subprocess.run(cmd, capture_output=not verbose, text=True)
+	if res.returncode != 0:
+		raise BuildError(f"Failed to compile image converter: {res.stdout}\n{res.stderr}")
+
+	# Run the converter
+	run = subprocess.run([str(converter_exe), str(icon_path), str(out_ico)], capture_output=not verbose, text=True)
+	if run.returncode != 0:
+		raise BuildError(f"Image converter failed: {run.stdout}\n{run.stderr}")
+	if not out_ico.exists():
+		raise BuildError("Image converter did not produce an ICO file.")
+	log(f"Converted {icon_path} -> {out_ico}", verbose=verbose)
+	return out_ico
 
 
 def assemble_exe(stub_path: Path, payload_zip: Path, output_path: Path) -> None:
@@ -327,7 +380,11 @@ def build(argv: list[str]) -> None:
 		payload_zip = tmpdir / "payload.zip"
 		build_payload_zip(payload_root, payload_zip)
 
-		stub_exe = compile_stub(tmpdir, verbose=args.verbose)
+		# If an icon was provided, convert it to ICO (if needed) and compile the stub with it.
+		ico_for_build = None
+		if args.icon:
+			ico_for_build = convert_image_to_ico(Path(args.icon), tmpdir, verbose=args.verbose)
+		stub_exe = compile_stub(tmpdir, verbose=args.verbose, win_icon=ico_for_build)
 		output_path.parent.mkdir(parents=True, exist_ok=True)
 		assemble_exe(stub_exe, payload_zip, output_path)
 
