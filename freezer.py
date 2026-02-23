@@ -360,8 +360,12 @@ def build(argv: list[str]) -> None:
 			pointer_copied = False
 			for pc in pointer_candidates:
 				if pc.exists():
-					shutil.copy2(pc, payload_root / ".prex")
-					log(f"Copied pointer file {pc} -> .prex", verbose=args.verbose)
+					# Copy the pointer file next to the bundled main script so that
+					# runtime lookup (prog dir / basename .prex) resolves correctly.
+					dest_for_prex = payload_root if main_dest_rel == "." else payload_root / main_dest_rel
+					dest_for_prex.mkdir(parents=True, exist_ok=True)
+					shutil.copy2(pc, dest_for_prex / ".prex")
+					log(f"Copied pointer file {pc} -> {dest_for_prex / '.prex'}", verbose=args.verbose)
 					pointer_copied = True
 					break
 			if not pointer_copied:
@@ -375,8 +379,10 @@ def build(argv: list[str]) -> None:
 							# interpreter will resolve it directly after extraction.
 							lines.append(str(Path("ext") / f.name))
 					if lines:
-						(payload_root / ".prex").write_text("\n".join(lines) + "\n", encoding="utf-8")
-						log(f"Generated .prex with {len(lines)} extensions", verbose=args.verbose)
+						dest_for_prex = payload_root if main_dest_rel == "." else payload_root / main_dest_rel
+						dest_for_prex.mkdir(parents=True, exist_ok=True)
+						(dest_for_prex / ".prex").write_text("\n".join(lines) + "\n", encoding="utf-8")
+						log(f"Generated .prex with {len(lines)} extensions -> {dest_for_prex / '.prex'}", verbose=args.verbose)
 		except OSError:
 			# Best-effort only; failure to copy/generate a pointer should not
 			# abort the build. The runtime will continue without extensions.
